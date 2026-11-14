@@ -1,0 +1,82 @@
+name: Google Maps leads
+
+on:
+  schedule:
+    # Every Monday at 07:23 UTC. GitHub can start scheduled runs a few minutes late.
+    # Each run costs one API request per search plus one per new lead (website lookup).
+    # For every weekday use "23 7 * * 1-5".
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: print what would be delivered, send nothing, save nothing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: google-maps-leads
+  cancel-in-progress: false
+
+jobs:
+  leads:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # commit state/leads.json, the list of leads already delivered
+    steps:
+      - name: Check for the API key
+        id: gate
+        env:
+          SCRAPEUNBLOCKER_KEY: ${{ secrets.SCRAPEUNBLOCKER_KEY }}
+        run: |
+          if [ -z "$SCRAPEUNBLOCKER_KEY" ]; then
+            echo "::notice title=Not set up yet::Add the SCRAPEUNBLOCKER_KEY repository secret (Settings > Secrets and variables > Actions) to start finding leads. Nothing was searched."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.ready == 'true'
+
+      - uses: actions/setup-python@v7
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        if: steps.gate.outputs.ready == 'true'
+        run: python -m pip install .
+
+      - name: Find new leads and deliver them
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          SCRAPEUNBLOCKER_KEY: ${{ secrets.SCRAPEUNBLOCKER_KEY }}
+          HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
+          PIPEDRIVE_API_TOKEN: ${{ secrets.PIPEDRIVE_API_TOKEN }}
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          LEADS_WEBHOOK_URL: ${{ secrets.LEADS_WEBHOOK_URL }}
+          DRY_RUN_FLAG: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: google-maps-leads run $DRY_RUN_FLAG
+
+      - name: Commit the state file
+        if: ${{ !cancelled() && steps.gate.outputs.ready == 'true' && !inputs.dry_run }}
+        run: |
+          git add state/
+          if git diff --cached --quiet; then
+            echo "Nothing new delivered; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update delivered leads [skip ci]"
+          git pull --rebase
+          git push

@@ -1,0 +1,87 @@
+# google-maps-leads-to-crm: the one file you edit.
+# Secrets (API key, CRM tokens, webhook URLs) are never set here: they come from
+# repository secrets in GitHub Actions, or from .env when you run it on your machine.
+
+# Which businesses. Every `what` is searched in every `where`, so this is 3 searches:
+# "roofing contractors in Austin, TX", "... in Round Rock, TX", "... in Cedar Park, TX".
+# Each search is one API request and returns up to about 20 businesses, so cover an area
+# with several towns, neighborhoods or zip codes rather than one big city.
+searches:
+  what:
+    - roofing contractors
+  where:
+    - Austin, TX
+    - Round Rock, TX
+    - Cedar Park, TX
+  country: US        # where Google searches from (2-letter code); results follow it
+  language: en       # Google's language for names and categories
+  per_run: 0         # 0 = every search on every run. With a long list, e.g. 10 = the next
+                     # 10 searches each run, so the whole list is covered over several runs.
+
+# Who counts as a lead. Businesses that don't pass are not delivered (and not saved, so
+# they are checked again next run, at no extra cost).
+filters:
+  min_rating: 4.0          # Google rating, 0-5
+  min_reviews: 10
+  max_reviews: 0           # 0 = no upper limit. e.g. 300 skips the biggest, chain-like ones
+  require_phone: true
+  categories: []           # keep only these Google categories (any part, any case),
+                           # e.g. ["Roofing contractor"]; empty = all
+  exclude_categories: []   # e.g. ["Gutter cleaning service"]
+  exclude_names: []        # e.g. a franchise you don't sell to
+  sponsored: include       # include | exclude | only. "only" = businesses running Google Maps ads
+
+# Look up each new lead's website with one Google search (1 API request per new lead).
+# Google Maps search results rarely show the website. A lead with no site found gets
+# the "no website found" signal.
+enrich:
+  website: true
+
+delivery:
+  # Every destination listed here is used once its secrets are set; the rest are skipped.
+  # CRMs get one record per lead, chats get one digest per run.
+  destinations: [hubspot, pipedrive, airtable, slack, discord, webhook]
+  max_new_per_run: 25      # the first run finds many; the rest come on the next runs
+
+  hubspot:                 # secret: HUBSPOT_TOKEN (a service key)
+    # <HubSpot company property>: <lead field>. Add your own custom properties here, e.g.
+    #   google_rating: rating
+    # Lead fields: name, category, rating, reviews, phone, website, domain, address,
+    # street, city, region, years_in_business, signals, sponsored, search, maps_url,
+    # summary, key, first_seen. Set a property to "" to leave it out.
+    properties:
+      name: name
+      phone: phone
+      domain: domain
+      website: website
+      address: street
+      city: city
+      state: region
+      description: summary
+    lifecycle_stage: lead  # set on new companies; "" to leave it out
+
+  pipedrive:               # secret: PIPEDRIVE_API_TOKEN
+    note: true             # a note on the organization with phone, rating, reviews, signals
+    create_lead: true      # also put it in the Leads Inbox
+    custom_fields: {}      # <custom field key (40-char hash)>: <lead field>
+
+  airtable:                # secret: AIRTABLE_TOKEN
+    base: ""               # your base id (appXXXXXXXXXXXXXX), or set AIRTABLE_BASE_ID
+    table: Leads           # table name or id
+    merge_on: Lead ID      # a lead whose id is already in this column is not added again
+    fields:                # <column>: <lead field>. Columns your table doesn't have are skipped.
+      Name: name
+      Category: category
+      Rating: rating
+      Reviews: reviews
+      Phone: phone
+      Website: website
+      Address: address
+      Signals: signals
+      Search: search
+      Google Maps: maps_url
+      First seen: first_seen
+      Lead ID: key
+
+# What has been delivered. The workflow commits this file, so a lead is never sent twice.
+state: state/leads.json
